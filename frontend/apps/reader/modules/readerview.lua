@@ -35,15 +35,15 @@ local ReaderView = OverlapGroup:extend{
         bbox = nil,
     },
     outer_page_color = Blitbuffer.gray(DOUTER_PAGE_COLOR/15),
-    -- highlight with "lighten" or "underscore" or "invert"
-    highlight = {
+    -- annotations with "lighten" or "underscore" or "invert"
+    annotations = {
         lighten_factor = 0.2,
         temp_drawer = "invert",
         temp = {},
         saved_drawer = "lighten",
         saved = {},
     },
-    highlight_visible = true,
+    annotations_visible = true,
     -- PDF/DjVu continuous paging
     page_scroll = nil,
     page_bgcolor = Blitbuffer.gray(DBACKGROUND_COLOR/15),
@@ -182,13 +182,13 @@ function ReaderView:paintTo(bb, x, y)
             self.arrow:paintTo(bb, 0, self.dim_area.h)
         end
     end
-    -- draw saved highlight
-    if self.highlight_visible then
-        self:drawSavedHighlight(bb, x, y)
+    -- draw saved annotations
+    if self.annotations_visible then
+        self:drawSavedAnnotations(bb, x, y)
     end
-    -- draw temporary highlight
-    if self.highlight.temp then
-        self:drawTempHighlight(bb, x, y)
+    -- draw temporary annotations
+    if self.annotations.temp then
+        self:drawTempAnnotations(bb, x, y)
     end
     -- paint dogear
     if self.dogear_visible then
@@ -441,57 +441,57 @@ function ReaderView:drawScrollView(bb, x, y)
         self.state.pos)
 end
 
-function ReaderView:drawTempHighlight(bb, x, y)
-    for page, boxes in pairs(self.highlight.temp) do
+function ReaderView:drawTempAnnotations(bb, x, y)
+    for page, boxes in pairs(self.annotations.temp) do
         for i = 1, #boxes do
             local rect = self:pageToScreenTransform(page, boxes[i])
             if rect then
-                self:drawHighlightRect(bb, x, y, rect, self.highlight.temp_drawer)
+                self:drawAnnotationsRect(bb, x, y, rect, self.annotations.temp_drawer)
             end
         end
     end
 end
 
-function ReaderView:drawSavedHighlight(bb, x, y)
+function ReaderView:drawSavedAnnotations(bb, x, y)
     if self.ui.document.info.has_pages then
-        self:drawPageSavedHighlight(bb, x, y)
+        self:drawPageSavedAnnotations(bb, x, y)
     else
-        self:drawXPointerSavedHighlight(bb, x, y)
+        self:drawXPointerSavedAnnotations(bb, x, y)
     end
 end
 
-function ReaderView:drawPageSavedHighlight(bb, x, y)
+--Compares each annotation with current "pages" (in scrolling mode)
+--and draws the ones inside our page.
+function ReaderView:drawPageSavedAnnotations(bb, x, y)
+    dbg("on DrawPageSavedAnnotations", bb, x, y)
     local pages = self:getCurrentPageList()
     for _, page in pairs(pages) do
-        local items = self.highlight.saved[page]
-        if not items then items = {} end
-        for i = 1, #items do
-            local item = items[i]
-            local pos0, pos1 = item.pos0, item.pos1
-            local boxes = self.ui.document:getPageBoxesFromPositions(page, pos0, pos1)
-            if boxes then
-                for _, box in pairs(boxes) do
-                    local rect = self:pageToScreenTransform(page, box)
-                    if rect then
-                        self:drawHighlightRect(bb, x, y, rect, item.drawer or self.highlight.saved_drawer)
-                    end
-                end -- end for each box
-            end -- end if boxes
-        end -- end for each highlight
+        for index, annotation in pairs(self.annotations.saved) do
+            --only proceed when annotation is in our page
+            if annotation.pos1.page == page then
+                local pos0, pos1 = annotation.pos0, annotation.pos1
+                local boxes = self.ui.document:getPageBoxesFromPositions(pos0.page, pos0, pos1)
+                if boxes then
+                    for _, box in pairs(boxes) do
+                        local rect = self:pageToScreenTransform(page, box)
+                        if rect then
+                            self:drawAnnotationsRect(bb, x, y, rect, annotation.drawer or self.annotations.saved_drawer)
+                        end
+                    end -- end for each box
+                end -- end if boxes
+            end
+        end -- end for each annotation
     end -- end for each page
 end
 
-function ReaderView:drawXPointerSavedHighlight(bb, x, y)
+function ReaderView:drawXPointerSavedAnnotations(bb, x, y)
     -- Getting screen boxes is done for each tap on screen (changing pages,
     -- showing menu...). We might want to cache these boxes per page (and
-    -- clear that cache when page layout change or highlights are added
+    -- clear that cache when page layout change or annotationss are added
     -- or removed).
+    dbg("on DrawXPointerSavedAnnotations", bb, x, y)
     local cur_view_top, cur_view_bottom
-    for page, _ in pairs(self.highlight.saved) do
-        local items = self.highlight.saved[page]
-        if not items then items = {} end
-        for j = 1, #items do
-            local item = items[j]
+    for _ , item in pairs(self.annotations.saved) do
             local pos0, pos1 = item.pos0, item.pos1
             -- document:getScreenBoxesFromPositions() is expensive, so we
             -- first check this item is on current page
@@ -514,28 +514,28 @@ function ReaderView:drawXPointerSavedHighlight(bb, x, y)
                 local boxes = self.ui.document:getScreenBoxesFromPositions(pos0, pos1, true) -- get_segments=true
                 if boxes then
                     for _, box in pairs(boxes) do
-                        local rect = self:pageToScreenTransform(page, box)
-                        if rect then
-                            self:drawHighlightRect(bb, x, y, rect, item.drawer or self.highlight.saved_drawer)
+                        --pageToScreenTransform returns second parameter when .self.has_pages is false
+                        --local rect = self:pageToScreenTransform(page, box)
+                        if box then
+                            self:drawAnnotationsRect(bb, x, y, box, item.drawer or self.annotations.saved_drawer)
                         end
                     end -- end for each box
                 end -- end if boxes
             end
-        end -- end for each highlight
-    end -- end for all saved highlight
+    end -- end for all saved annotations
 end
 
-function ReaderView:drawHighlightRect(bb, _x, _y, rect, drawer)
+function ReaderView:drawAnnotationsRect(bb, _x, _y, rect, drawer)
     local x, y, w, h = rect.x, rect.y, rect.w, rect.h
 
     if drawer == "underscore" then
-        self.highlight.line_width = self.highlight.line_width or 2
-        self.highlight.line_color = self.highlight.line_color or Blitbuffer.COLOR_GRAY
+        self.annotations.line_width = self.annotations.line_width or 2
+        self.annotations.line_color = self.annotations.line_color or Blitbuffer.COLOR_GRAY
         bb:paintRect(x, y+h-1, w,
-            self.highlight.line_width,
-            self.highlight.line_color)
+            self.annotations.line_width,
+            self.annotations.line_color)
     elseif drawer == "lighten" then
-        bb:lightenRect(x, y, w, h, self.highlight.lighten_factor)
+        bb:lightenRect(x, y, w, h, self.annotations.lighten_factor)
     elseif drawer == "invert" then
         bb:invertRect(x, y, w, h)
     end
@@ -766,7 +766,7 @@ function ReaderView:onReadSettings(config)
     self:resetLayout()
     local page_scroll = config:readSetting("kopt_page_scroll") or self.document.configurable.page_scroll
     self.page_scroll = page_scroll == 1 and true or false
-    self.highlight.saved = config:readSetting("highlight") or {}
+    self.annotations.saved = config:readSetting("annotations") or {}
     self.page_overlap_style = config:readSetting("page_overlap_style") or G_reader_settings:readSetting("page_overlap_style") or "dim"
     self.page_gap.height = Screen:scaleBySize(config:readSetting("kopt_page_gap_height") or
         G_reader_settings:readSetting("kopt_page_gap_height") or 8)
@@ -775,21 +775,21 @@ end
 function ReaderView:onPageUpdate(new_page_no)
     self.state.page = new_page_no
     self:recalculate()
-    self.highlight.temp = {}
+    self.annotations.temp = {}
     self:checkAutoSaveSettings()
 end
 
 function ReaderView:onPosUpdate(new_pos)
     self.state.pos = new_pos
     self:recalculate()
-    self.highlight.temp = {}
+    self.annotations.temp = {}
     self:checkAutoSaveSettings()
 end
 
 function ReaderView:onZoomUpdate(zoom)
     self.state.zoom = zoom
     self:recalculate()
-    self.highlight.temp = {}
+    self.annotations.temp = {}
 end
 
 function ReaderView:onBBoxUpdate(bbox)
@@ -846,7 +846,7 @@ function ReaderView:onSaveSettings()
     self.ui.doc_settings:saveSetting("screen_mode", Screen:getScreenMode())
     self.ui.doc_settings:saveSetting("rotation_mode", Screen:getRotationMode())
     self.ui.doc_settings:saveSetting("gamma", self.state.gamma)
-    self.ui.doc_settings:saveSetting("highlight", self.highlight.saved)
+    self.ui.doc_settings:saveSetting("annotations", self.annotations.saved)
     self.ui.doc_settings:saveSetting("page_overlap_style", self.page_overlap_style)
 end
 

@@ -108,13 +108,13 @@ function ReaderHighlight:genHighlightDrawerMenu()
         return {
             text = highlight_style[style],
             checked_func = function()
-                return self.view.highlight.saved_drawer == style
+                return self.view.annotations.saved_drawer == style
             end,
             enabled_func = function()
-                return not self.view.highlight.disabled
+                return not self.view.annotations.disabled
             end,
             callback = function()
-                self.view.highlight.saved_drawer = style
+                self.view.annotations.saved_drawer = style
             end
         }
     end
@@ -122,10 +122,10 @@ function ReaderHighlight:genHighlightDrawerMenu()
         {
             text = _("Allow highlighting"),
             checked_func = function()
-                return not self.view.highlight.disabled
+                return not self.view.annotations.disabled
             end,
             callback = function()
-                self.view.highlight.disabled = not self.view.highlight.disabled
+                self.view.annotations.disabled = not self.view.annotations.disabled
             end,
             hold_callback = function(touchmenu_instance)
                 self:toggleDefault()
@@ -156,7 +156,7 @@ function ReaderHighlight:clear(clear_id)
     end
     self.clear_id = nil -- invalidate id
     if self.ui.document.info.has_pages then
-        self.view.highlight.temp = {}
+        self.view.annotations.temp = {}
     else
         self.ui.document:clearSelection()
     end
@@ -199,28 +199,34 @@ local function inside_box(pos, box)
     end
 end
 
+--Compares gesture location and page with saved annotation locations
+-- and pages. Called in paged documents.
+--view:getCurrentPageList is necessary for getting both pages on screen
+--when in scrolling mode.
 function ReaderHighlight:onTapPageSavedHighlight(ges)
     local pages = self.view:getCurrentPageList()
     local pos = self.view:screenToPageTransform(ges.pos)
+    logger.dbg("On Tap Page Saved Highlight")
     for key, page in pairs(pages) do
-        local items = self.view.highlight.saved[page]
-        if items then
-            for i = 1, #items do
-                local pos0, pos1 = items[i].pos0, items[i].pos1
-                local boxes = self.ui.document:getPageBoxesFromPositions(page, pos0, pos1)
-                if boxes then
-                    for index, box in pairs(boxes) do
-                        if inside_box(pos, box) then
-                            logger.dbg("Tap on highlight")
-                            return self:onShowHighlightDialog(page, i)
-                        end
+        for index, annotation in pairs(self.view.annotations.saved) do
+            local boxes = self.ui.document:getPageBoxesFromPositions(page,
+                annotation.pos0, annotation.pos1)
+
+            logger.dbg("Boxes", boxes)
+            if boxes and page == annotation.pos0.page then
+                for _, box in pairs(boxes) do
+                    if inside_box(pos, box) then
+                        logger.dbg("Tap on highlight")
+                        return self:onShowHighlightDialog(index)
                     end
-                end
+                end --end of boxes
             end
         end
     end
 end
 
+--Compares gesture's position with saved annotations's positon. If
+--gesture is inside same page and box :onShowAnnotation dialog is called.
 function ReaderHighlight:onTapXPointerSavedHighlight(ges)
     -- Getting screen boxes is done for each tap on screen (changing pages,
     -- showing menu...). We might want to cache these boxes per page (and
@@ -228,36 +234,33 @@ function ReaderHighlight:onTapXPointerSavedHighlight(ges)
     -- or removed).
     local cur_view_top, cur_view_bottom
     local pos = self.view:screenToPageTransform(ges.pos)
-    for page, _ in pairs(self.view.highlight.saved) do
-        local items = self.view.highlight.saved[page]
-        if items then
-            for i = 1, #items do
-                local pos0, pos1 = items[i].pos0, items[i].pos1
-                -- document:getScreenBoxesFromPositions() is expensive, so we
-                -- first check this item is on current page
-                if not cur_view_top then
-                    -- Even in page mode, it's safer to use pos and ui.dimen.h
-                    -- than pages' xpointers pos, even if ui.dimen.h is a bit
-                    -- larger than pages' heights
-                    cur_view_top = self.ui.document:getCurrentPos()
-                    if self.view.view_mode == "page" and self.ui.document:getVisiblePageCount() > 1 then
-                        cur_view_bottom = cur_view_top + 2 * self.ui.dimen.h
-                    else
-                        cur_view_bottom = cur_view_top + self.ui.dimen.h
-                    end
+    for index , item in pairs(self.view.annotations.saved) do
+        if item then
+            local pos0, pos1 = item.pos0, item.pos1
+            -- document:getScreenBoxesFromPositions() is expensive, so we
+            -- first check this item is on current page
+            if not cur_view_top then
+                -- Even in page mode, it's safer to use pos and ui.dimen.h
+                -- than pages' xpointers pos, even if ui.dimen.h is a bit
+                -- larger than pages' heights
+                cur_view_top = self.ui.document:getCurrentPos()
+                if self.view.view_mode == "page" and self.ui.document:getVisiblePageCount() > 1 then
+                    cur_view_bottom = cur_view_top + 2 * self.ui.dimen.h
+                else
+                    cur_view_bottom = cur_view_top + self.ui.dimen.h
                 end
-                local spos0 = self.ui.document:getPosFromXPointer(pos0)
-                local spos1 = self.ui.document:getPosFromXPointer(pos1)
-                local start_pos = math.min(spos0, spos1)
-                local end_pos = math.max(spos0, spos1)
-                if start_pos <= cur_view_bottom and end_pos >= cur_view_top then
-                    local boxes = self.ui.document:getScreenBoxesFromPositions(pos0, pos1, true) -- get_segments=true
-                    if boxes then
-                        for index, box in pairs(boxes) do
-                            if inside_box(pos, box) then
-                                logger.dbg("Tap on highlight")
-                                return self:onShowHighlightDialog(page, i)
-                            end
+            end
+            local spos0 = self.ui.document:getPosFromXPointer(pos0)
+            local spos1 = self.ui.document:getPosFromXPointer(pos1)
+            local start_pos = math.min(spos0, spos1)
+            local end_pos = math.max(spos0, spos1)
+            if start_pos <= cur_view_bottom and end_pos >= cur_view_top then
+                local boxes = self.ui.document:getScreenBoxesFromPositions(pos0, pos1, true) -- get_segments=true
+                if boxes then
+                    for _, box in pairs(boxes) do
+                        if inside_box(pos, box) then
+                            logger.dbg("Tap on highlight")
+                            return self:onShowHighlightDialog(index)
                         end
                     end
                 end
@@ -266,15 +269,17 @@ function ReaderHighlight:onTapXPointerSavedHighlight(ges)
     end
 end
 
-function ReaderHighlight:updateHighlight(page, index, side, direction, move_by_char)
+function ReaderHighlight:updateHighlight(index, side, direction, move_by_char)
     if self.ui.document.info.has_pages then -- we do this only if it's epub file
-        return
+    logger.dbg("document is paged", index)
+       return
     end
 
-    local highlight = self.view.highlight.saved[page][index]
+    local highlight = self.view.annotations.saved[index]
     local highlight_time = highlight.datetime
     local highlight_beginning = highlight.pos0
     local highlight_end = highlight.pos1
+    logger.dbg("highlight_text:", highlight.text)
     if side == 0 then -- we move pos0
         local updated_highlight_beginning
         if direction == 1 then -- move highlight to the right
@@ -293,7 +298,7 @@ function ReaderHighlight:updateHighlight(page, index, side, direction, move_by_c
         if updated_highlight_beginning then
             local order = self.ui.document:compareXPointers(updated_highlight_beginning, highlight_end)
             if order and order > 0 then -- only if beginning did not go past end
-                self.view.highlight.saved[page][index].pos0 = updated_highlight_beginning
+                self.view.annotations.saved[index].pos0 = updated_highlight_beginning
             end
         end
     else -- we move pos1
@@ -313,17 +318,26 @@ function ReaderHighlight:updateHighlight(page, index, side, direction, move_by_c
         end
         if updated_highlight_end then
             local order = self.ui.document:compareXPointers(highlight_beginning, updated_highlight_end)
+
             if order and order > 0 then -- only if end did not go back past beginning
-                self.view.highlight.saved[page][index].pos1 = updated_highlight_end
+                -- logger.dbg("index.pos1 was:", self.view.annotations.saved[index].pos1)
+                self.view.annotations.saved[index].pos1 = updated_highlight_end
+                -- logger.dbg("Changed index.pos1 to:", updated_highlight_end)
+            else
+                logger.dbg("Order check failed")
+
             end
         end
     end
 
-    local new_beginning = self.view.highlight.saved[page][index].pos0
-    local new_end = self.view.highlight.saved[page][index].pos1
+    local new_beginning = self.view.annotations.saved[index].pos0
+    local new_end = self.view.annotations.saved[index].pos1
     local new_text = self.ui.document:getTextFromXPointers(new_beginning, new_end)
-    self.view.highlight.saved[page][index].text = new_text
-    local new_highlight = self.view.highlight.saved[page][index]
+    logger.dbg("new text:", new_text)
+    logger.dbg("new end:", new_end)
+    -- logger.dbg("new beginning:", new_beginning)
+    self.view.annotations.saved[index].text = new_text
+    local new_highlight = self.view.annotations.saved[index]
     self.ui.bookmark:updateBookmark({
         page = highlight_beginning,
         datetime = highlight_time,
@@ -332,13 +346,18 @@ function ReaderHighlight:updateHighlight(page, index, side, direction, move_by_c
     UIManager:setDirty(self.dialog, "ui")
 end
 
-function ReaderHighlight:onShowHighlightDialog(page, index)
+--@param index Index of bookmark.
+--Show annotation dialog on ReaderView.
+--Used to be called with both page and index of bookmark but since annotations
+--indexed with only by index, page parameter is unnecessary. If page info is needed use
+--annotation.page or annotation.percent depending on need.
+function ReaderHighlight:onShowHighlightDialog(index)
     local buttons = {
         {
             {
                 text = _("Delete"),
                 callback = function()
-                    self:deleteHighlight(page, index)
+                    self:deleteHighlight(index)
                     -- other part outside of the dialog may be dirty
                     UIManager:close(self.edit_highlight_dialog, "ui")
                 end,
@@ -346,14 +365,14 @@ function ReaderHighlight:onShowHighlightDialog(page, index)
             {
                 text = _("Edit"),
                 callback = function()
-                    self:editHighlight(page, index)
+                    self:editHighlight(index)
                     UIManager:close(self.edit_highlight_dialog)
                 end,
             },
             {
                 text = _("…"),
                 callback = function()
-                    self.selected_text = self.view.highlight.saved[page][index]
+                    self.selected_text = self.view.annotations.saved[index]
                     self:onShowHighlightMenu()
                     UIManager:close(self.edit_highlight_dialog)
                 end,
@@ -376,39 +395,39 @@ function ReaderHighlight:onShowHighlightDialog(page, index)
             {
                 text = start_prev,
                 callback = function()
-                    self:updateHighlight(page, index, 0, -1, false)
+                    self:updateHighlight(index, 0, -1, false)
                 end,
                 hold_callback = function()
-                    self:updateHighlight(page, index, 0, -1, true)
+                    self:updateHighlight(index, 0, -1, true)
                     return true
                 end
             },
             {
                 text = start_next,
                 callback = function()
-                    self:updateHighlight(page, index, 0, 1, false)
+                    self:updateHighlight(index, 0, 1, false)
                 end,
                 hold_callback = function()
-                    self:updateHighlight(page, index, 0, 1, true)
+                    self:updateHighlight(index, 0, 1, true)
                     return true
                 end
             },
             {
                 text = end_prev,
                 callback = function()
-                    self:updateHighlight(page, index, 1, -1, false)
+                    self:updateHighlight(index, 1, -1, false)
                 end,
                 hold_callback = function()
-                    self:updateHighlight(page, index, 1, -1, true)
+                    self:updateHighlight(index, 1, -1, true)
                 end
             },
             {
                 text = end_next,
                 callback = function()
-                    self:updateHighlight(page, index, 1, 1, false)
+                    self:updateHighlight(index, 1, 1, false)
                 end,
                 hold_callback = function()
-                    self:updateHighlight(page, index, 1, 1, true)
+                    self:updateHighlight(index, 1, 1, true)
                 end
             }
         })
@@ -532,7 +551,7 @@ end
 
 function ReaderHighlight:onHold(arg, ges)
     -- disable hold gesture if highlighting is disabled
-    if self.view.highlight.disabled then return false end
+    if self.view.annotations.disabled then return false end
     self:clear() -- clear previous highlight (delayed clear may not have done it yet)
     self.hold_ges_pos = ges.pos -- remember hold original gesture position
     self.hold_pos = self.view:screenToPageTransform(ges.pos)
@@ -574,7 +593,7 @@ function ReaderHighlight:onHold(arg, ges)
         if self.ui.document.info.has_pages then
             local boxes = {}
             table.insert(boxes, self.selected_word.sbox)
-            self.view.highlight.temp[self.hold_pos.page] = boxes
+            self.view.annotations.temp[self.hold_pos.page] = boxes
         end
         UIManager:setDirty(self.dialog, "ui")
         --- @todo only mark word?
@@ -724,7 +743,7 @@ function ReaderHighlight:onHoldPan(_, ges)
     end
     logger.dbg("selected text:", self.selected_text)
     if self.selected_text then
-        self.view.highlight.temp[self.hold_pos.page] = self.selected_text.sboxes
+        self.view.annotations.temp[self.hold_pos.page] = self.selected_text.sboxes
         -- remove selected word if hold moves out of word box
         if not self.selected_text.sboxes or #self.selected_text.sboxes == 0 then
             self.selected_word = nil
@@ -1001,10 +1020,10 @@ function ReaderHighlight:onCycleHighlightStyle()
         underscore = "invert",
         invert = "lighten"
     }
-    self.view.highlight.saved_drawer = next_actions[self.view.highlight.saved_drawer]
-    self.ui.doc_settings:saveSetting("highlight_drawer", self.view.highlight.saved_drawer)
+    self.view.annotations.saved_drawer = next_actions[self.view.annotations.saved_drawer]
+    self.ui.doc_settings:saveSetting("highlight_drawer", self.view.annotations.saved_drawer)
     UIManager:show(Notification:new{
-        text = T(_("Default highlight style changed to '%1'."), self.view.highlight.saved_drawer),
+        text = T(_("Default highlight style changed to '%1'."), self.view.annotations.saved_drawer),
         timeout = 1,
     })
     return true
@@ -1023,8 +1042,10 @@ function ReaderHighlight:onHighlight()
     self:saveHighlight()
 end
 
-function ReaderHighlight:onUnhighlight(bookmark_item)
-    local page
+--Called from bookmarks or dictionary lookup. 
+--TODO Make this only work with annotation index
+function ReaderHighlight:onUnhighlight(selected_index)
+  --[[   local page
     local sel_text
     local sel_pos0
     local datetime
@@ -1038,16 +1059,19 @@ function ReaderHighlight:onUnhighlight(bookmark_item)
         page = self.hold_pos.page
         sel_text = self.selected_text.text
         sel_pos0 = self.selected_text.pos0
-    end
+    end ]]
+    local idx
+    local selected = self.view.annotations.saved[selected_index]
     if self.ui.document.info.has_pages then -- We can safely use page
-        for index = 1, #self.view.highlight.saved[page] do
-            local highlight = self.view.highlight.saved[page][index]
+        -- for index = 1, #self.view.annotations.saved[page] do
+        --     local highlight = self.view.annotations.saved[page][index]
+        for index, annotation in self.view.annotations.saved do
             -- pos0 are tables and can't be compared directly, except when from
             -- DictQuickLookup where these are the same object.
             -- If bookmark_item provided, just check datetime
-            if highlight.text == sel_text and (
-                    (datetime == nil and highlight.pos0 == sel_pos0) or
-                    (datetime ~= nil and highlight.datetime == datetime)) then
+            if annotation.text == selected.text and (
+                    (selected.datetime == nil and annotation.pos0 == selected.pos0) or
+                    (selected.datetime ~= nil and annotation.datetime == selected.datetime)) then
                 idx = index
                 break
             end
@@ -1056,32 +1080,30 @@ function ReaderHighlight:onUnhighlight(bookmark_item)
         -- The original page could be found in bookmark_item.text, but
         -- no more if it has been renamed: we need to loop through all
         -- highlights on all page slots
-        for p, highlights in pairs(self.view.highlight.saved) do
-            for index = 1, #highlights do
-                local highlight = highlights[index]
+        for index, annotation in pairs(self.view.annotations.saved) do
                 -- pos0 are strings and can be compared directly
-                if highlight.text == sel_text and (
-                        (datetime == nil and highlight.pos0 == sel_pos0) or
-                        (datetime ~= nil and highlight.datetime == datetime)) then
-                    page = p -- this is the original page slot
-                    idx = index
-                    break
-                end
+            if annotation.text == selected.text and (
+                    (selected.datetime == nil and annotation.pos0 == selected.pos0) or
+                    (selected.datetime ~= nil and annotation.datetime == selected.datetime)) then
+                idx = index
+                break
             end
+            --TODO What is the purpose of this?
             if idx then
                 break
             end
         end
     end
-    if bookmark_item and not idx then
-        logger.warn("unhighlight: bookmark_item not found among highlights", bookmark_item)
-        -- Remove it from bookmarks anyway, so we're not stuck with an
-        -- unremovable bookmark
-        self.ui.bookmark:removeBookmark(bookmark_item)
-        return
-    end
-    logger.dbg("found highlight to delete on page", page, idx)
-    self:deleteHighlight(page, idx, bookmark_item)
+    -- if bookmark_item and not idx then
+    --     logger.warn("unhighlight: bookmark_item not found among highlights", bookmark_item)
+    --     -- Remove it from bookmarks anyway, so we're not stuck with an
+    --     -- unremovable bookmark
+    --     self.ui.bookmark:removeBookmark(bookmark_item)
+    --     return
+    -- end
+    --TODO Maybe warn users if they are deleting a commented bookmark.
+    logger.dbg("found highlight to delete on page", self.view.annotation.saved[idx], idx)
+    self:deleteHighlight(idx, {})
     return true
 end
 
@@ -1107,26 +1129,45 @@ end
 function ReaderHighlight:saveHighlight()
     self.ui:handleEvent(Event:new("AddHighlight"))
     logger.dbg("save highlight")
-    local page = self.hold_pos.page
+
+    local page, chapter
+    if self.ui.document.info.has_pages then
+        page = self.hold_pos.page
+        chapter = self.ui.toc:getTocTitleByPage(page)
+    else
+        page = self.ui.document:getPageFromXPointer(self.selected_text.pos0)
+        chapter = self.ui.toc:getTocTitleByPage(self.selected_text.pos0)
+    end
+    local total_page = self.ui.document:getPageCount()
+
     if self.hold_pos and self.selected_text and self.selected_text.pos0
         and self.selected_text.pos1 then
-        if not self.view.highlight.saved[page] then
-            self.view.highlight.saved[page] = {}
+            --TODO This is probably unnecessary since ReaderView already creating this.
+        if not self.view.annotations.saved then
+            self.view.annotations.saved = {}
         end
         local datetime = os.date("%Y-%m-%d %H:%M:%S")
         local hl_item = {
             datetime = datetime,
+            chapter = chapter,
+            page = page,
+            total_page = total_page,
+            percent = page/total_page,
+            creation_timestamp = os.time(),
             text = self.selected_text.text,
+            comment = nil,
             pos0 = self.selected_text.pos0,
             pos1 = self.selected_text.pos1,
             pboxes = self.selected_text.pboxes,
-            drawer = self.view.highlight.saved_drawer,
+            drawer = self.view.annotations.saved_drawer,
         }
-        table.insert(self.view.highlight.saved[page], hl_item)
-        local bookmark_item = self:getHighlightBookmarkItem()
-        if bookmark_item then
-            self.ui.bookmark:addBookmark(bookmark_item)
-        end
+        table.insert(self.view.annotations.saved, hl_item)
+        --TODO but Probably not necessary since bookmark logic will use same source.
+        --self.ui.bookmark.addBookmarkFromHighlighter(hl_item)
+        --local bookmark_item = self:getHighlightBookmarkItem()
+        --if bookmark_item then
+         --   self.ui.bookmark:addBookmark(bookmark_item)
+        --end
         --[[
         -- disable exporting highlights to My Clippings
         -- since it's not portable and there is a better Evernote plugin
@@ -1136,9 +1177,9 @@ function ReaderHighlight:saveHighlight()
         end
         --]]
         if self.selected_text.pboxes then
-            self:exportToDocument(page, hl_item)
+            self:exportToDocument(hl_item.pos0.page, hl_item)
         end
-        return page, #self.view.highlight.saved[page]
+        return hl_item
     end
 end
 
@@ -1167,8 +1208,14 @@ function ReaderHighlight:exportToDocument(page, item)
 end
 
 function ReaderHighlight:addNote()
-    local page, index = self:saveHighlight()
-    self:editHighlight(page, index)
+    local added_annotation = self:saveHighlight()
+    local index
+    for ind, annot in self.view.annotations.saved do
+        if annot.creation_timestamp == added_annotation.creation_timestamp then
+            index = ind
+        end
+    end
+    self:editHighlight(index)
     UIManager:close(self.edit_highlight_dialog)
     self.ui:handleEvent(Event:new("AddNote"))
 end
@@ -1204,40 +1251,40 @@ function ReaderHighlight:moreAction()
     logger.info("more action")
 end
 
-function ReaderHighlight:deleteHighlight(page, i, bookmark_item)
+function ReaderHighlight:deleteHighlight(index)
     self.ui:handleEvent(Event:new("DelHighlight"))
-    logger.dbg("delete highlight", page, i)
-    local removed = table.remove(self.view.highlight.saved[page], i)
-    if bookmark_item then
-        self.ui.bookmark:removeBookmark(bookmark_item)
-    else
-        self.ui.bookmark:removeBookmark({
-            page = self.ui.document.info.has_pages and page or removed.pos0,
-            datetime = removed.datetime,
-        })
-    end
+    local removed = table.remove(self.view.annotations.saved[index])
+    logger.dbg("delete highlight", removed.text, "on page:", removed.page, index)
+    -- if bookmark_item then
+    --     self.ui.bookmark:removeBookmark(bookmark_item)
+    -- else
+    --     self.ui.bookmark:removeBookmark({
+    --         page = self.ui.document.info.has_pages and removed.page or removed.pos0,
+    --         datetime = removed.datetime,
+    --     })
+    -- end
 end
 
-function ReaderHighlight:editHighlight(page, i)
-    local item = self.view.highlight.saved[page][i]
+function ReaderHighlight:editHighlight(index)
+    local item = self.view.annotations.saved[index]
     self.ui.bookmark:renameBookmark({
-        page = self.ui.document.info.has_pages and page or item.pos0,
+        page = self.ui.document.info.has_pages and item.page or item.pos0,
         datetime = item.datetime,
     }, true)
 end
 
 function ReaderHighlight:onReadSettings(config)
-    self.view.highlight.saved_drawer = config:readSetting("highlight_drawer") or self.view.highlight.saved_drawer
+    self.view.annotations.saved_drawer = config:readSetting("highlight_drawer") or self.view.annotations.saved_drawer
     local disable_highlight = config:readSetting("highlight_disabled")
     if disable_highlight == nil then
         disable_highlight = G_reader_settings:readSetting("highlight_disabled") or false
     end
-    self.view.highlight.disabled = disable_highlight
+    self.view.annotations.disabled = disable_highlight
 end
 
 function ReaderHighlight:onSaveSettings()
-    self.ui.doc_settings:saveSetting("highlight_drawer", self.view.highlight.saved_drawer)
-    self.ui.doc_settings:saveSetting("highlight_disabled", self.view.highlight.disabled)
+    self.ui.doc_settings:saveSetting("highlight_drawer", self.view.annotations.saved_drawer)
+    self.ui.doc_settings:saveSetting("highlight_disabled", self.view.annotations.disabled)
 end
 
 function ReaderHighlight:onClose()
